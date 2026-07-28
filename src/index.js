@@ -11,6 +11,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 
 import { DevToolsServer, discoverPaths } from './devtools.js';
 import { buildTools } from './tools.js';
+import { SERVER_INSTRUCTIONS } from './instructions.js';
 
 const VERBOSE = process.env.AL_MCP_VERBOSE === '1';
 const IDLE_MS = Number(process.env.AL_MCP_IDLE_MS ?? 5 * 60_000);
@@ -32,13 +33,19 @@ const devtools = new DevToolsServer({ idleTimeoutMs: IDLE_MS, log });
 const tools = buildTools(devtools);
 const byName = new Map(tools.map((t) => [t.name, t]));
 
+// `instructions` is returned in the initialize result and injected into the
+// model's system prompt by the client. Without it, the only thing steering an
+// agent towards these tools is the descriptions -- which it reads after it has
+// already decided to look for a tool.
 const server = new Server(
   { name: 'al-devtools', version: '0.1.0' },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+  tools: tools.map(({ name, description, inputSchema, annotations }) => ({
+    name, description, inputSchema, ...(annotations ? { annotations } : {}),
+  })),
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
