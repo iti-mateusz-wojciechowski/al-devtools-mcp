@@ -9,8 +9,31 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, '..', 'src', 'index.js');
 
-const PROJECT = process.argv[2]
-  || 'C:\\Users\\mateusz.wojciechowsk\\OneDrive - IT.integro sp. z o.o\\_Repo\\Approvals';
+// Target project: CLI argument, then AL_TEST_PROJECT, then a sibling folder of
+// this repo containing an app.json. No machine-specific path is baked in.
+function discoverProject() {
+  if (process.argv[2]) return process.argv[2];
+  if (process.env.AL_TEST_PROJECT) return process.env.AL_TEST_PROJECT;
+  const siblings = join(here, '..', '..');
+  try {
+    for (const e of readdirSync(siblings, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue;
+      const candidate = join(siblings, e.name);
+      if (existsSync(join(candidate, 'app.json'))) return candidate;
+    }
+  } catch { /* nothing discoverable */ }
+  return undefined;
+}
+
+const PROJECT = discoverProject();
+if (!PROJECT) {
+  console.error(
+    'No AL project found to test against.\n' +
+    'Pass one explicitly:  npm run smoke -- "/path/to/AL/project"\n' +
+    'or set AL_TEST_PROJECT. The folder must contain app.json.'
+  );
+  process.exit(1);
+}
 
 function firstAlFile(dir) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {

@@ -9,8 +9,15 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "check": "node scripts/check.js",
+    "register": "node scripts/register.js",
     "smoke": "node test/smoke.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iti-mateusz-wojciechowski/al-devtools-mcp.git"
+  },
+  "license": "MIT",
   "engines": {
     "node": ">=18"
   },

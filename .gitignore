@@ -1,5 +1,20 @@
+# Node
 node_modules/
 package-lock.json
 *.log
+
+# AL — in case a scratch AL project is created here for testing
+.vscode/
+.alcache/
+.alpackages/
+.snapshots/
+.output/
+*.app
+rad.json
+*.g.xlf
+*.flf
+TestResults.xml
+
+# OS
 .DS_Store
 Thumbs.db
