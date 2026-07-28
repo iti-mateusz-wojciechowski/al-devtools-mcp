@@ -184,7 +184,7 @@ agent cannot misuse a tool it cannot see. See `EXCLUDED_COMMANDS` in
 
 | Command(s) | Why |
 |---|---|
-| `addFieldCaptions` | Sets `Caption` to the field name verbatim, **workspace prefix included** — `"ITIECO Scratch Amount"` yields `Caption = 'ITIECO Scratch Amount'`. Captions should state intent, and this leaks the prefix into the UI. Verified. |
+| `addFieldCaptions` | Sets `Caption` to the field name verbatim, **workspace prefix included** — `"Contoso Freight Amount"` yields `Caption = 'Contoso Freight Amount'`. Captions should state intent, and this leaks the prefix into the UI. Verified. |
 | `addObjectCaptions`, `addEnumCaptions`, `addPageControlCaptions`, `lockRemovedFieldsCaptions` | Same generator family. Inferred, not individually tested. |
 | `addToolTips`, `addTooTipsEndingDots`, `refreshToolTips`, `setPageFieldToolTip` | Page-oriented — `addToolTips` does nothing on a table/tableextension. Putting the `ToolTip` on the table field so every page inherits it is the usual convention; these do the opposite. Verified for `addToolTips`. |
 | `sortPermissions` | Sorts correctly but corrupts indentation: emits `Permissions =         codeunit …` on the property line and drops the second entry to column 0. Verified. |

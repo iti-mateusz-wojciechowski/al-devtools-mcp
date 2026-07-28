@@ -72,8 +72,8 @@ export const METADATA_COMMANDS = {
  * Verified by direct test unless marked (inferred).
  *
  *   addFieldCaptions        Sets Caption to the field name verbatim, workspace prefix
- *                           included -- a field named "ITIECO Scratch Amount" gets
- *                           Caption = 'ITIECO Scratch Amount'. Captions must state
+ *                           included -- a field named "Contoso Freight Amount" gets
+ *                           Caption = 'Contoso Freight Amount'. Captions must state
  *                           intent, and this leaks the prefix into the UI.
  *   addObjectCaptions       (inferred) same generator family as addFieldCaptions.
  *   addEnumCaptions         (inferred) same generator family.
