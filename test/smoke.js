@@ -112,8 +112,6 @@ const header = (s) => console.log('\n' + '='.repeat(76) + `\n${s}\n` + '='.repea
   });
   console.log('serverInfo:  ', JSON.stringify(init.result?.serverInfo));
   console.log('capabilities:', JSON.stringify(init.result?.capabilities));
-  // Clients put `instructions` into the model's system prompt -- if it silently
-  // stops being returned, tool discovery degrades with nothing else failing.
   const instructions = init.result?.instructions;
   console.log(`instructions: ${instructions ? `${instructions.length} bytes (~${Math.round(instructions.length / 4)} tokens)` : 'MISSING -- discovery guidance is not reaching the model'}`);
   if (!instructions) { child.kill(); process.exit(1); }

@@ -169,58 +169,11 @@ portable VS Code install, a devcontainer, or a CI runner with no VS Code at all
 | `al_cleanup` | 22 purely syntactic fixes to one file: `sortProcedures`, `sortTableFields`, `sortVariables`, `removeBeginEnd`, `fixKeywordsCase`, … |
 | `al_add_metadata` | 14 symbol-aware fixes to one file: `addDataClassification`, `addAppAreas`, `addAllObjectsPermissions`, `removeUnusedVariables`, `convertObjectIdsToNames`, `removeWith`, … |
 | `al_project_cleanup` | Apply commands across every `.al` file in a project. `dryRun: true` by default. |
-| `al_find_duplicates` | Structural duplicate-code detection across a project. Read-only. |
-| `al_outline` | Compact structural outline of one file, instead of reading it. Read-only. |
+| `al_find_duplicates` | Structural duplicate-code detection across a project. |
+| `al_outline` | Compact structural outline of one file, instead of reading it. |
 
 Commands are enum values rather than separate tools, because tool schemas are paid
 for on every request and enum values are not.
-
-`al_add_metadata` both adds and removes despite its name — the split from
-`al_cleanup` is by whether the fix needs the symbol table loaded, not by what it
-does to your code.
-
-### Discovery — will an agent actually use these?
-
-An MCP tool only gets called if the model reaches for it unprompted, and a tool
-description is read *after* the model has decided to look for a tool. Three things
-here exist for that reason, and are worth preserving if you edit them:
-
-1. **`instructions` in the initialize result** ([src/instructions.js](src/instructions.js)).
-   Clients inject it into the system prompt, so it is the only place this server can
-   say "use `al_cleanup` instead of editing the file" or "call `al_outline` before
-   reading a large object" — cross-tool preferences and ordering that no single tool
-   description can express. Keep it short; it is paid for on every request.
-2. **Analyzer IDs in the command descriptions.** An agent usually arrives holding a
-   diagnostic (`AA0137`), not an urge to tidy up, so the rule ID is the real trigger.
-   Only IDs verified against the published [CodeCop rule list][codecop] are cited —
-   a wrong ID routes the agent to a tool that will not fix its problem.
-3. **Verb-first descriptions.** Some harnesses defer tool schemas and match on the
-   name plus the opening line, fetching the full description on demand. When that
-   happens the command enums are invisible at selection time, so each description
-   leads with what it *does* rather than with how it is implemented.
-
-What descriptions cannot do is make an agent tidy code nobody asked it to touch —
-nor should they. If you want mechanical conventions enforced as a matter of course,
-say so in your own project instructions, e.g. in `CLAUDE.md`:
-
-```markdown
-## AL conventions
-
-Member order in AL objects is enforced mechanically, not by hand. After creating or
-editing an AL object, run `al_cleanup` with `sortTableFields`, `sortProcedures` and
-`sortVariables` (`write: true`), and fix any analyzer diagnostic that has a
-matching `al_cleanup` / `al_add_metadata` command with that tool rather than by
-editing text.
-```
-
-None of this is free. Measured with `npm run smoke`, the advertised surface is
-**10.6 KB across five tools (~2650 tokens), plus 1.7 KB of instructions (~425
-tokens)**, paid on every request — about 880 tokens more than descriptions that only
-said what each tool does. That is roughly one avoided full read of a mid-sized AL
-object, so it pays for itself the first time an agent calls `al_outline` instead of
-reading a 60 KB codeunit. Trim it if you disagree; keep the analyzer IDs.
-
-[codecop]: https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/analyzers/codecop
 
 ### Commands deliberately not exposed
 
@@ -260,7 +213,7 @@ containing `app.json` is used.
 | `src/index.js` | MCP server entry point: protocol wiring, tool dispatch, logging. |
 | `src/devtools.js` | Language server client: path discovery, spawn, LSP framing, workspace registration, idle shutdown, orphan cleanup. |
 | `src/tools.js` | The five tool definitions, their command enums, and handlers. |
-| `src/instructions.js` | Server-level `instructions` returned at initialize; clients put it in the model's system prompt. |
+| `src/instructions.js` | Server instructions returned at initialize. |
 | `src/diff.js` | Unified diff generator (LCS with prefix/suffix trimming). |
 | `src/symbolKinds.js` | 165 AL symbol kind numbers to names; generated from the extension. |
 | `scripts/check.js` | Preflight diagnostics (`npm run check`). |
