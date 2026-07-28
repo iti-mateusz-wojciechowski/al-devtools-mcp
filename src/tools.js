@@ -17,16 +17,22 @@ import { unifiedDiff, diffStats } from './diff.js';
 import { kindName } from './symbolKinds.js';
 
 // Purely syntactic rewrites. Fast, and safe to run without reading symbols.
+//
+// Analyzer IDs are quoted where a CodeCop rule genuinely covers the command --
+// they are the realistic trigger, because an agent usually arrives here holding a
+// diagnostic from al_getdiagnostics rather than the wish to tidy something. Only
+// rules verified against the published CodeCop list are cited; a wrong ID is worse
+// than none, since it sends the agent to a tool that will not fix its problem.
 export const CLEANUP_COMMANDS = {
   sortProcedures: 'Sort procedures alphabetically (respects #region scopes; attributes and doc comments travel with each procedure)',
   sortTriggers: 'Sort triggers alphabetically',
   sortProperties: 'Sort object properties into canonical order',
   sortTableFields: 'Sort table fields by field ID',
-  sortVariables: 'Sort var declarations into AL canonical order (complex types first, then simple types by type then name)',
-  sortUsings: 'Sort namespace using statements',
+  sortVariables: 'Sort var declarations into AL canonical order, complex types first, then simple types by type then name (CodeCop AA0021)',
+  sortUsings: 'Sort namespace using statements (CodeCop AA0477)',
   sortReportColumns: 'Sort report columns',
   sortCustomizations: 'Sort the Customizations property',
-  removeBeginEnd: 'Remove begin..end around single statements',
+  removeBeginEnd: 'Remove begin..end around single statements (CodeCop AA0005)',
   removeEmptyLines: 'Remove redundant empty lines',
   removeEmptySections: 'Remove empty sections',
   removeEmptyTriggers: 'Remove empty triggers',
@@ -35,9 +41,9 @@ export const CLEANUP_COMMANDS = {
   trimTrailingWhitespace: 'Trim trailing whitespace',
   oneStatementPerLine: 'Split multiple statements onto separate lines',
   addParentheses: 'Add missing parentheses to parameterless calls (CodeCop AA0008)',
-  fixKeywordsCase: 'Normalise keyword casing',
-  fixIdentifiersCase: 'Normalise identifier and keyword casing',
-  formatDocument: 'Apply standard AL document formatting',
+  fixKeywordsCase: 'Normalise keyword casing to lowercase (CodeCop AA0241)',
+  fixIdentifiersCase: 'Normalise identifier casing to match declarations, and keyword casing (CodeCop AA0241)',
+  formatDocument: 'Apply standard AL document formatting (indentation, spacing, line breaks)',
   addUsingRegion: 'Wrap using statements in a #region',
   updateUsingsList: 'Remove unused using statements',
 };
@@ -51,10 +57,10 @@ export const METADATA_COMMANDS = {
   addTableDataCaptionFields: 'Add the DataCaptionFields property to tables',
   addDropDownFieldGroups: 'Add DropDown field groups',
   convertObjectIdsToNames: 'Replace numeric object IDs with object names',
-  removeUnusedVariables: 'Remove variables that are never referenced (CodeCop AA0137)',
-  removeWith: 'Remove "with" statements, qualifying members explicitly',
+  removeUnusedVariables: 'Remove variables that are declared but never referenced (CodeCop AA0137)',
+  removeWith: 'Remove "with" statements, qualifying members explicitly (CodeCop AA0040 flags nested "with")',
   makeFlowFieldsReadOnly: 'Mark FlowFields as Editable = false',
-  removeStrSubstNoFromError: 'Simplify Error(StrSubstNo(...)) into Error(...)',
+  removeStrSubstNoFromError: 'Simplify Error(StrSubstNo(...)) into Error(...) (CodeCop AA0231)',
   addMissingCaseLines: 'Add missing case branches for enum values',
   addAllObjectsPermissions: 'Add permissions for every object in the project that is missing one',
   addReferencedTablesPermissions: 'Add tabledata permissions for referenced tables',
@@ -183,10 +189,14 @@ export function buildTools(server) {
     {
       name: 'al_cleanup',
       description:
-        'Apply a deterministic, purely syntactic AL code fix to one file using the AZ AL Dev Tools ' +
-        'Roslyn engine. Use this instead of rewriting AL by hand: it is exact, and it correctly handles ' +
-        'string literals, comments, #region scopes, and attribute/doc-comment ownership that text editing ' +
-        'gets wrong. Returns a unified diff by default and does NOT write unless write:true.\n\n' +
+        'Sort and reformat one AL file: sort procedures, triggers, table fields, variables, properties or ' +
+        'using statements; remove begin..end around single statements, empty lines, empty triggers and ' +
+        'redundant semicolons; normalise keyword and identifier casing; add missing parentheses; format the ' +
+        'document. Fixes CodeCop AA0005, AA0008, AA0021, AA0241 and AA0477.\n\n' +
+        'Purely syntactic, so no symbol table is needed and it is fast. Use this instead of rewriting AL by ' +
+        'hand: it parses the file with the AZ AL Dev Tools Roslyn engine, so string literals, comments, ' +
+        '#region scopes, and attribute/doc-comment ownership are preserved where text editing corrupts them. ' +
+        'Returns a unified diff by default and does NOT write unless write:true.\n\n' +
         'Commands:\n' + describeCommands(CLEANUP_COMMANDS),
       inputSchema: {
         type: 'object',
@@ -205,15 +215,20 @@ export function buildTools(server) {
     {
       name: 'al_add_metadata',
       description:
-        'Apply an AL fix that requires the symbol table (Base App and dependencies) to one file -- ' +
-        'ApplicationArea, DataClassification, permission-set coverage, unused-variable removal, ' +
-        'object-ID-to-name conversion, "with" removal. These cannot be done by text manipulation ' +
-        'because they need real field names, project-wide object lists or name binding. Slower than ' +
-        'al_cleanup (first call loads symbols, ~4s). Returns a unified diff by default and does NOT ' +
+        'Remove unused variables (CodeCop AA0137), remove "with" statements (AA0040), simplify ' +
+        'Error(StrSubstNo(...)) (AA0231), add missing ApplicationArea or DataClassification, add ' +
+        'permission-set entries for project objects and referenced tables, replace numeric object IDs with ' +
+        'object names, add missing case branches for enum values, mark FlowFields read-only, add ' +
+        'DataCaptionFields and DropDown field groups -- in one AL file.\n\n' +
+        'Despite the name this both adds and removes; the tool exists separately from al_cleanup because ' +
+        'every command here needs the symbol table (Base App and dependencies) loaded. They depend on real ' +
+        'field names, name binding, or the project-wide object list, so text manipulation cannot do them. The ' +
+        'first call loads symbols (~4s); later calls are fast. Returns a unified diff by default and does NOT ' +
         'write unless write:true.\n\n' +
         'Caption and ToolTip generators are deliberately not offered: they emit captions that merely ' +
-        'echo the field name (prefix included), and their ToolTip handling targets page fields rather ' +
-        'than table fields. Write caption and tooltip text yourself.\n\n' +
+        'echo the field name (workspace prefix included), and they target page-field ToolTips (AA0218) ' +
+        'rather than the table-field ToolTips (AA0234) that every page then inherits. Write caption and ' +
+        'tooltip text yourself.\n\n' +
         'Commands:\n' + describeCommands(METADATA_COMMANDS),
       inputSchema: {
         type: 'object',
@@ -232,10 +247,12 @@ export function buildTools(server) {
     {
       name: 'al_project_cleanup',
       description:
-        'Apply one or more AL fixes across every .al file in a project. Transforms in memory and reports ' +
-        'which files would change; writes nothing unless dryRun:false. Use for repo-wide tidy-ups ' +
-        '(e.g. sortProcedures + removeEmptyLines over a whole app). Run it on a clean git working tree ' +
-        'so the change is easy to review or revert.',
+        'Apply one or more AL fixes across every .al file in a project, in one call. Use this instead of ' +
+        'looping al_cleanup or al_add_metadata over many files -- whenever a fix applies to a whole app ' +
+        'rather than one object (e.g. sortProcedures + removeEmptyLines over an app, or ' +
+        'addDataClassification across every table). Accepts any command from al_cleanup or al_add_metadata. ' +
+        'Transforms in memory and reports which files would change; writes nothing unless dryRun:false. Run ' +
+        'it on a clean git working tree so the change is easy to review or revert.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -306,7 +323,9 @@ export function buildTools(server) {
       description:
         'Find duplicated code blocks across an AL project using the AZ AL Dev Tools duplicate-code ' +
         'detector. Compares parsed statement structure rather than text, so it catches clones that differ ' +
-        'in naming and formatting. Useful before refactoring, or to locate extract-to-procedure candidates.',
+        'in naming and formatting. Use it before starting a refactor, when asked to reduce copy-paste, or to ' +
+        'locate extract-to-procedure candidates. Read-only: it never modifies files.',
+      annotations: { title: 'Find duplicated AL code', readOnlyHint: true },
       inputSchema: {
         type: 'object',
         properties: {
@@ -343,9 +362,14 @@ export function buildTools(server) {
     {
       name: 'al_outline',
       description:
-        'Get a compact structural outline of one AL file -- objects, fields, procedures, triggers, ' +
-        'controls, actions -- without reading the file. Far cheaper than reading a large AL object when ' +
-        'you only need to know what is in it and where.',
+        'Get a compact structural outline of one AL file -- objects, fields, procedures, triggers, controls, ' +
+        'actions, each with its line number -- without reading the file. Call this before reading a large AL ' +
+        'object, then read only the line ranges you need; far cheaper than pulling a 2000-line object into ' +
+        'context to find one procedure.\n\n' +
+        'Parses the file as it currently exists on disk, so unlike symbol- or package-based lookups it ' +
+        'reflects uncommitted local edits and works on objects that do not compile yet or are not present in ' +
+        'any .app package. Read-only: it never modifies files.',
+      annotations: { title: 'Outline an AL file', readOnlyHint: true },
       inputSchema: {
         type: 'object',
         properties: {
