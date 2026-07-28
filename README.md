@@ -166,15 +166,34 @@ portable VS Code install, a devcontainer, or a CI runner with no VS Code at all
 
 | Tool | Purpose |
 |---|---|
-| `al_cleanup` | 24 purely syntactic fixes to one file: `sortProcedures`, `sortTableFields`, `sortVariables`, `removeBeginEnd`, `fixKeywordsCase`, … |
-| `al_add_metadata` | 23 symbol-aware fixes to one file: `addToolTips`, `addFieldCaptions`, `addDataClassification`, `removeUnusedVariables`, `convertObjectIdsToNames`, … |
+| `al_cleanup` | 22 purely syntactic fixes to one file: `sortProcedures`, `sortTableFields`, `sortVariables`, `removeBeginEnd`, `fixKeywordsCase`, … |
+| `al_add_metadata` | 14 symbol-aware fixes to one file: `addDataClassification`, `addAppAreas`, `addAllObjectsPermissions`, `removeUnusedVariables`, `convertObjectIdsToNames`, `removeWith`, … |
 | `al_project_cleanup` | Apply commands across every `.al` file in a project. `dryRun: true` by default. |
 | `al_find_duplicates` | Structural duplicate-code detection across a project. |
 | `al_outline` | Compact structural outline of one file, instead of reading it. |
 
-Total advertised schema is ~9.6 KB (~2.4k tokens) for 47 commands. Commands are
-enum values rather than separate tools, because tool schemas are paid for on every
-request and enum values are not.
+Commands are enum values rather than separate tools, because tool schemas are paid
+for on every request and enum values are not.
+
+### Commands deliberately not exposed
+
+The engine offers ~50 commands; 11 are withheld because their output is wrong or
+conflicts with common AL conventions. Withholding beats documenting a warning — an
+agent cannot misuse a tool it cannot see. See `EXCLUDED_COMMANDS` in
+[src/tools.js](src/tools.js); each is one line from being restored.
+
+| Command(s) | Why |
+|---|---|
+| `addFieldCaptions` | Sets `Caption` to the field name verbatim, **workspace prefix included** — `"ITIECO Scratch Amount"` yields `Caption = 'ITIECO Scratch Amount'`. Captions should state intent, and this leaks the prefix into the UI. Verified. |
+| `addObjectCaptions`, `addEnumCaptions`, `addPageControlCaptions`, `lockRemovedFieldsCaptions` | Same generator family. Inferred, not individually tested. |
+| `addToolTips`, `addTooTipsEndingDots`, `refreshToolTips`, `setPageFieldToolTip` | Page-oriented — `addToolTips` does nothing on a table/tableextension. Putting the `ToolTip` on the table field so every page inherits it is the usual convention; these do the opposite. Verified for `addToolTips`. |
+| `sortPermissions` | Sorts correctly but corrupts indentation: emits `Permissions =         codeunit …` on the property line and drops the second entry to column 0. Verified. |
+| `sortPermissionSetList` | Unverified and adjacent to the above defect. |
+
+`addAllObjectsPermissions` **is** exposed — tested against a permission set missing
+four codeunits, it added all four with correct indentation.
+
+Use `al_outline` to *find* fields lacking captions, then write the text yourself.
 
 `projectPath` is optional on the per-file tools — the nearest ancestor directory
 containing `app.json` is used.
@@ -294,11 +313,16 @@ bursts with long gaps.
 ## Known limitations
 
 - `removeUnusedVariables` can report no change even when a variable is unused — it
-  needs its settings object populated, which this version does not do.
+  needs its settings object populated, which this version does not do. Treat a
+  negative result as inconclusive.
 - `collectworkspacecodeactions` ("what does the extension think is fixable here")
   throws a null reference in the shipped language server, so it is not exposed.
 - `getcodeanalyzersrules` returns an empty result and is not exposed.
 - `sortProcedures` can leave a stray blank line after the opening `{`. Cosmetic.
+- `addReferencedTablesPermissions` is exposed but unverified — it returned no change
+  on the one project tested, which may be correct for that project.
+- Eleven engine commands are withheld as wrong or convention-conflicting; see
+  [Commands deliberately not exposed](#commands-deliberately-not-exposed).
 - Only Windows is exercised in testing.
 
 Fixing the first three requires patching the language server, which means owning

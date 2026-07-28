@@ -25,8 +25,6 @@ export const CLEANUP_COMMANDS = {
   sortVariables: 'Sort var declarations into AL canonical order (complex types first, then simple types by type then name)',
   sortUsings: 'Sort namespace using statements',
   sortReportColumns: 'Sort report columns',
-  sortPermissions: 'Sort permission set permissions',
-  sortPermissionSetList: 'Sort included permission sets',
   sortCustomizations: 'Sort the Customizations property',
   removeBeginEnd: 'Remove begin..end around single statements',
   removeEmptyLines: 'Remove redundant empty lines',
@@ -46,15 +44,7 @@ export const CLEANUP_COMMANDS = {
 
 // Need the symbol table (Base App / dependencies) loaded, so slower and richer.
 export const METADATA_COMMANDS = {
-  addToolTips: 'Add missing ToolTips to page fields, reusing tooltips from dependencies where available',
-  addTooTipsEndingDots: 'Add the required trailing period to ToolTips',
-  refreshToolTips: 'Refresh ToolTips from dependency definitions',
-  setPageFieldToolTip: 'Reuse a field ToolTip defined on other pages',
-  addFieldCaptions: 'Add missing Caption properties to table fields',
-  addObjectCaptions: 'Add missing object Captions',
-  addEnumCaptions: 'Add missing Captions to enum values',
-  addPageControlCaptions: 'Add missing Captions to page controls',
-  addDataClassification: 'Add missing DataClassification to fields',
+  addDataClassification: 'Add missing DataClassification to fields (emits CustomerContent)',
   removeRedundantDataClassification: 'Remove DataClassification that matches the object default',
   addAppAreas: 'Add missing ApplicationArea to page controls and actions',
   removeRedundantAppAreas: 'Remove ApplicationArea that duplicates the object default',
@@ -66,10 +56,50 @@ export const METADATA_COMMANDS = {
   makeFlowFieldsReadOnly: 'Mark FlowFields as Editable = false',
   removeStrSubstNoFromError: 'Simplify Error(StrSubstNo(...)) into Error(...)',
   addMissingCaseLines: 'Add missing case branches for enum values',
-  lockRemovedFieldsCaptions: 'Lock captions of removed table fields',
-  addAllObjectsPermissions: 'Add permissions for all objects in the project',
-  addReferencedTablesPermissions: 'Add permissions for referenced tables',
+  addAllObjectsPermissions: 'Add permissions for every object in the project that is missing one',
+  addReferencedTablesPermissions: 'Add tabledata permissions for referenced tables',
 };
+
+/**
+ * Engine commands deliberately NOT exposed, and why.
+ *
+ * The engine offers ~50 commands; these are withheld because their output is wrong
+ * or actively conflicts with house AL conventions. Not exposing them is stronger
+ * than documenting a warning: an agent cannot misuse a tool it cannot see, and the
+ * schema stays smaller. Each is one line away from being restored if the upstream
+ * behaviour changes.
+ *
+ * Verified by direct test unless marked (inferred).
+ *
+ *   addFieldCaptions        Sets Caption to the field name verbatim, workspace prefix
+ *                           included -- a field named "ITIECO Scratch Amount" gets
+ *                           Caption = 'ITIECO Scratch Amount'. Captions must state
+ *                           intent, and this leaks the prefix into the UI.
+ *   addObjectCaptions       (inferred) same generator family as addFieldCaptions.
+ *   addEnumCaptions         (inferred) same generator family.
+ *   addPageControlCaptions  (inferred) same generator family.
+ *   lockRemovedFieldsCaptions (inferred) same caption family.
+ *
+ *   addToolTips             Page-oriented: adds ToolTips to page fields and does
+ *                           nothing on a table/tableextension. House convention puts
+ *                           the ToolTip on the table field so every page inherits it.
+ *   addTooTipsEndingDots    Operates on page-level ToolTips, same mismatch.
+ *   refreshToolTips         Same.
+ *   setPageFieldToolTip     Same.
+ *
+ *   sortPermissions         Sorts correctly but corrupts indentation: emits
+ *                           "Permissions =         codeunit ... ," on the property
+ *                           line and puts the second entry at column 0.
+ *   sortPermissionSetList   (inferred) unverified and adjacent to the above defect.
+ *
+ * Note addAllObjectsPermissions IS exposed -- tested against a permission set missing
+ * four codeunits, it added all four with correct indentation.
+ */
+export const EXCLUDED_COMMANDS = [
+  'addFieldCaptions', 'addObjectCaptions', 'addEnumCaptions', 'addPageControlCaptions',
+  'lockRemovedFieldsCaptions', 'addToolTips', 'addTooTipsEndingDots', 'refreshToolTips',
+  'setPageFieldToolTip', 'sortPermissions', 'sortPermissionSetList',
+];
 
 const ALL_COMMANDS = { ...CLEANUP_COMMANDS, ...METADATA_COMMANDS };
 
@@ -176,10 +206,14 @@ export function buildTools(server) {
       name: 'al_add_metadata',
       description:
         'Apply an AL fix that requires the symbol table (Base App and dependencies) to one file -- ' +
-        'captions, tooltips, ApplicationArea, DataClassification, unused-variable removal, object-ID-to-name ' +
-        'conversion. These cannot be done by text manipulation because they need real field names, ' +
-        'dependency tooltips or name binding. Slower than al_cleanup (first call loads symbols, ~4s). ' +
-        'Returns a unified diff by default and does NOT write unless write:true.\n\n' +
+        'ApplicationArea, DataClassification, permission-set coverage, unused-variable removal, ' +
+        'object-ID-to-name conversion, "with" removal. These cannot be done by text manipulation ' +
+        'because they need real field names, project-wide object lists or name binding. Slower than ' +
+        'al_cleanup (first call loads symbols, ~4s). Returns a unified diff by default and does NOT ' +
+        'write unless write:true.\n\n' +
+        'Caption and ToolTip generators are deliberately not offered: they emit captions that merely ' +
+        'echo the field name (prefix included), and their ToolTip handling targets page fields rather ' +
+        'than table fields. Write caption and tooltip text yourself.\n\n' +
         'Commands:\n' + describeCommands(METADATA_COMMANDS),
       inputSchema: {
         type: 'object',
