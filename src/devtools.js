@@ -11,7 +11,7 @@
 // and is never released.
 
 import { spawn } from 'node:child_process';
-import { readdirSync, existsSync, statSync } from 'node:fs';
+import { readdirSync, existsSync, statSync, chmodSync, accessSync, constants } from 'node:fs';
 import { join, dirname, parse as parsePath } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -67,6 +67,24 @@ export function discoverPaths() {
   const platform = process.platform;
   const exe = join(devtoolsPath, 'bin', 'netcore', platform, 'AZALDevToolsServer.NetCore' + (platform === 'win32' ? '.exe' : ''));
   if (!existsSync(exe)) throw new Error(`Language server binary not found at ${exe}`);
+
+  // VSIX packaging does not preserve POSIX permissions, so the shipped binary
+  // arrives without the execute bit on macOS and Linux and spawning it fails with
+  // EACCES. The VS Code extension chmods it on every start for the same reason.
+  if (platform !== 'win32') {
+    try {
+      accessSync(exe, constants.X_OK);
+    } catch {
+      try {
+        chmodSync(exe, 0o755);
+      } catch (err) {
+        throw new Error(
+          `Language server binary at ${exe} is not executable and could not be chmod'ed: ${err.message}. ` +
+            'Run: chmod +x "' + exe + '"'
+        );
+      }
+    }
+  }
 
   return { devtoolsPath, alPath, exe };
 }
