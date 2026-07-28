@@ -1,0 +1,28 @@
+{
+  "name": "al-devtools-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server exposing the AZ AL Dev Tools Roslyn engine as agent tools",
+  "type": "module",
+  "bin": {
+    "al-devtools-mcp": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node scripts/check.js",
+    "register": "node scripts/register.js",
+    "smoke": "node test/smoke.js",
+    "test:no-vscode": "node test/no-vscode.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iti-mateusz-wojciechowski/al-devtools-mcp.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  }
+}
