@@ -1,0 +1,14 @@
+al-devtools-mcp
+Copyright (c) 2026 Mateusz Wojciechowski
+
+This project is an MCP adapter over the language server from al-code-outline
+(https://github.com/anzwdev/al-code-outline), Copyright (c) 2017 Andrzej
+Zwierzchowski, licensed under the MIT License.
+
+All AL parsing, analysis and code transformation logic belongs to that project.
+This repository contains only the MCP protocol adapter, tool definitions, diff
+generation, and process lifecycle management.
+
+At runtime the language server loads Microsoft.Dynamics.Nav.CodeAnalysis from an
+installed Microsoft AL Language extension (ms-dynamics-smb.al). Those assemblies
+are Microsoft's and are neither redistributed nor modified by this project.
