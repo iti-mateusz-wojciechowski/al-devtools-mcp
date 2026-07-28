@@ -112,6 +112,11 @@ const header = (s) => console.log('\n' + '='.repeat(76) + `\n${s}\n` + '='.repea
   });
   console.log('serverInfo:  ', JSON.stringify(init.result?.serverInfo));
   console.log('capabilities:', JSON.stringify(init.result?.capabilities));
+  // Clients put `instructions` into the model's system prompt -- if it silently
+  // stops being returned, tool discovery degrades with nothing else failing.
+  const instructions = init.result?.instructions;
+  console.log(`instructions: ${instructions ? `${instructions.length} bytes (~${Math.round(instructions.length / 4)} tokens)` : 'MISSING -- discovery guidance is not reaching the model'}`);
+  if (!instructions) { child.kill(); process.exit(1); }
   notify('notifications/initialized', {});
 
   header('2. tools/list');
@@ -120,7 +125,8 @@ const header = (s) => console.log('\n' + '='.repeat(76) + `\n${s}\n` + '='.repea
   for (const t of tools) {
     const enumVals = t.inputSchema?.properties?.command?.enum
       || t.inputSchema?.properties?.commands?.items?.enum;
-    console.log(`  ${t.name}${enumVals ? ` (${enumVals.length} commands)` : ''} -- schema ${JSON.stringify(t.inputSchema).length} bytes`);
+    const ro = t.annotations?.readOnlyHint ? ' [read-only]' : '';
+    console.log(`  ${t.name}${enumVals ? ` (${enumVals.length} commands)` : ''}${ro} -- schema ${JSON.stringify(t.inputSchema).length} bytes, description ${t.description.length} bytes`);
   }
   const totalSchema = JSON.stringify(tools).length;
   console.log(`\n  advertised surface: ${tools.length} tools, ${totalSchema} bytes (~${Math.round(totalSchema / 4)} tokens)`);
