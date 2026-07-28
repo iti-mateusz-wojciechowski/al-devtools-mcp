@@ -1,6 +1,5 @@
 # Node
 node_modules/
-package-lock.json
 *.log
 
 # AL — in case a scratch AL project is created here for testing
