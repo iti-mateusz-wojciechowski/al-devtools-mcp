@@ -238,6 +238,29 @@ The smoke test drives the server over real MCP stdio and checks the handshake,
 tool listing, each tool, error handling, idle shutdown, recovery after shutdown,
 and that no orphaned processes remain. It is read-only.
 
+### Proving it works without VS Code
+
+The claim that VS Code need not be running is easy to doubt, because the AZ AL Dev
+Tools *extension* starts its own copy of the same language server on activation.
+This project starts a **separate** copy; it never talks to VS Code's.
+
+To verify rather than take it on trust:
+
+1. Close VS Code completely — every window.
+2. From a plain terminal (not VS Code's integrated one):
+
+```bash
+npm run test:no-vscode -- "/path/to/AL/project"
+```
+
+The test **refuses to run** if any `Code.exe` process is alive or if an
+`AZALDevToolsServer` process already exists, so it cannot accidentally pass by
+leaning on a VS Code instance. It then asserts that the language server serving
+the calls is a child of the test's own Node process, exercises every tool including
+a symbol-dependent one, and confirms no process is left behind.
+
+Windows-only, because the process assertions use `Get-CimInstance`.
+
 ## Verified with
 
 | | |
