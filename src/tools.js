@@ -11,7 +11,7 @@
 // not.
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, relative, basename } from 'node:path';
+import { join, relative, basename, resolve } from 'node:path';
 import { findProjectPath } from './devtools.js';
 import { unifiedDiff, diffStats } from './diff.js';
 import { kindName } from './symbolKinds.js';
@@ -88,8 +88,21 @@ function listAlFiles(dir, acc = []) {
   return acc;
 }
 
+/**
+ * Normalise a path to this platform's native separators.
+ *
+ * The language server rejects forward-slash paths on Windows ("Workspace command
+ * <x> error during processing file ..."), while Node's fs accepts them happily --
+ * so an unnormalised path passes the existence check and then fails deep in the
+ * engine with an opaque message. Agents and JSON configs routinely use forward
+ * slashes, so normalise every path on the way in.
+ */
+function nativePath(p) {
+  return p === undefined || p === null ? p : resolve(p);
+}
+
 function resolveProject(filePath, explicit) {
-  const projectPath = explicit || findProjectPath(filePath);
+  const projectPath = nativePath(explicit) || findProjectPath(filePath);
   if (!projectPath) {
     throw new Error(`Could not locate an AL project (no app.json found above ${filePath}). Pass projectPath explicitly.`);
   }
@@ -98,11 +111,12 @@ function resolveProject(filePath, explicit) {
 
 /** Shared implementation for al_cleanup and al_add_metadata. */
 async function runTransform(server, args, allowed, toolName) {
-  const { command, filePath, write = false, output = 'diff', projectPath: explicitProject } = args;
+  const { command, write = false, output = 'diff', projectPath: explicitProject } = args;
   if (!allowed[command]) {
     throw new Error(`Unknown command '${command}' for ${toolName}. Allowed: ${Object.keys(allowed).join(', ')}`);
   }
-  if (!filePath) throw new Error('filePath is required');
+  if (!args.filePath) throw new Error('filePath is required');
+  const filePath = nativePath(args.filePath);
   if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
 
   const projectPath = resolveProject(filePath, explicitProject);
@@ -203,7 +217,8 @@ export function buildTools(server) {
         required: ['commands', 'projectPath'],
       },
       handler: async (args) => {
-        const { commands, projectPath, dryRun = true, maxFiles = 500 } = args;
+        const { commands, dryRun = true, maxFiles = 500 } = args;
+        const projectPath = nativePath(args.projectPath);
         if (!Array.isArray(commands) || commands.length === 0) throw new Error('commands must be a non-empty array');
         for (const c of commands) if (!ALL_COMMANDS[c]) throw new Error(`Unknown command '${c}'`);
         if (!existsSync(join(projectPath, 'app.json'))) throw new Error(`No app.json in ${projectPath} -- not an AL project root.`);
@@ -269,7 +284,8 @@ export function buildTools(server) {
         required: ['projectPath'],
       },
       handler: async (args) => {
-        const { projectPath, minNoOfStatements = 10, skipObsoleteCodeLevel = 0, maxGroups = 40 } = args;
+        const { minNoOfStatements = 10, skipObsoleteCodeLevel = 0, maxGroups = 40 } = args;
+        const projectPath = nativePath(args.projectPath);
         await server.ensureProject(projectPath);
         const res = await server.request('al/findDuplicateCode', { minNoOfStatements, skipObsoleteCodeLevel, path: projectPath });
         const groups = res?.duplicates || [];
@@ -306,7 +322,9 @@ export function buildTools(server) {
         required: ['filePath'],
       },
       handler: async (args) => {
-        const { filePath, includeProperties = false } = args;
+        const { includeProperties = false } = args;
+        const filePath = nativePath(args.filePath);
+        if (!filePath) throw new Error('filePath is required');
         if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
         const projectPath = resolveProject(filePath, args.projectPath);
         const source = readFileSync(filePath, 'utf8');
