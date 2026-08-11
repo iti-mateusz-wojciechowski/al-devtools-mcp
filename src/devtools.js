@@ -186,7 +186,14 @@ export class DevToolsServer {
   _resetIdleTimer() {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (!this.idleTimeoutMs) return;
-    this.idleTimer = setTimeout(() => this.stop('idle timeout'), this.idleTimeoutMs);
+    this.idleTimer = setTimeout(() => {
+      // The timer is armed when a request is *sent*, so a single long command --
+      // a project-wide workspace pass runs for minutes -- would otherwise trip it
+      // and kill the server mid-write. Idle means nothing outstanding, not merely
+      // nothing new.
+      if (this.pending.size > 0) return this._resetIdleTimer();
+      this.stop('idle timeout');
+    }, this.idleTimeoutMs);
     this.idleTimer.unref(); // never hold the event loop open
   }
 
@@ -243,7 +250,13 @@ export class DevToolsServer {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${method}`));
+        // Tagged, because a timeout is not just a failure: the server is still
+        // running the command, and for a command that writes to disk that means
+        // it is still writing. A caller holding a rollback has to be able to tell
+        // this apart from a clean refusal.
+        const err = new Error(`Timed out after ${timeoutMs}ms waiting for ${method}`);
+        err.code = 'ETIMEDOUT';
+        reject(err);
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
@@ -291,12 +304,18 @@ export class DevToolsServer {
     return promise;
   }
 
-  /** Run a workspace command. Pass `source` to transform in memory (no disk writes). */
-  async workspaceCommand({ command, source, projectPath, filePath, parameters = {}, includeFiles, excludeFiles, range }) {
+  /**
+   * Run a workspace command. Pass `source` to transform in memory (no disk writes).
+   *
+   * `timeoutMs` overrides the per-request default: workspace mode (empty `source`)
+   * walks the whole project, which takes far longer than the single-file default
+   * was sized for.
+   */
+  async workspaceCommand({ command, source, projectPath, filePath, parameters = {}, includeFiles, excludeFiles, range, timeoutMs }) {
     await this.ensureProject(projectPath);
     const result = await this.request('al/workspacecommand', {
       command, source, projectPath, filePath, parameters, includeFiles, excludeFiles, range,
-    });
+    }, timeoutMs ?? this.requestTimeoutMs);
     if (!result) throw new Error(`No response from language server for command '${command}'`);
     if (result.error) throw new Error(result.errorMessage || `Command '${command}' failed`);
     return result;

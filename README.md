@@ -153,7 +153,8 @@ All optional.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AL_MCP_IDLE_MS` | `300000` | Idle ms before the language server is shut down. |
+| `AL_MCP_IDLE_MS` | `300000` | Idle ms before the language server is shut down. Idle means nothing outstanding, so a long command will not trip it. |
+| `AL_MCP_PROJECT_TIMEOUT_MS` | `900000` | Ms one `al_project_cleanup` command may take. On expiry the language server is stopped and the run abandoned. |
 | `AL_MCP_VERBOSE` | unset | Set to `1` for stderr logging. |
 | `AL_DEVTOOLS_EXT_PATH` | auto | Override the AZ AL Dev Tools extension directory. |
 | `AL_EXT_PATH` | auto | Override the AL Language extension directory. |
@@ -230,10 +231,19 @@ An empty `excludeFiles` excludes nothing, which is just the unscoped run.
   Workspace mode only writes to disk, so the tool snapshots every `.al` file first,
   lets the engine write, diffs, and then restores the originals from the snapshot
   (in a `finally`, so a mid-run failure still rolls back). The snapshot holds raw
-  bytes, so a file that is not valid UTF-8 is restored exactly rather than re-encoded.
+  bytes, so a file that is not valid UTF-8 is restored exactly rather than re-encoded,
+  and the rollback covers files the engine deleted or created as well as edited.
   Consequences worth knowing: files that *would* change get their mtime bumped, and
   the rollback is only as good as the process staying alive. Run it on a clean git
   working tree.
+- **One `al_project_cleanup` per project at a time**, and no `write: true` on
+  `al_cleanup` or `al_add_metadata` into a project while one is running — such a write
+  lands inside the window the rollback reverts, and would vanish without a word. Both
+  are refused with an error rather than queued. Previews are unaffected.
+- **A timed-out command abandons the run.** Giving up on the response does not stop
+  the engine, which is still writing, so the language server is stopped outright
+  before anything is diffed or rolled back. Remaining commands are skipped, and the
+  report says so — after `dryRun: false` the project is left partially transformed.
 - Run project-wide changes on a clean git working tree so they are easy to review
   or revert.
 
