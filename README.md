@@ -217,6 +217,11 @@ are matched differently by the engine, and a wrong format fails **silently**:
 `includeFiles` wants absolute paths, `excludeFiles` wants project-relative paths with
 forward slashes (or a `**/`-style glob). Both are normalised for you.
 
+An **empty** `includeFiles` selects nothing and does nothing — it is not the same as
+omitting the parameter. That is the case a caller scoping to "the files in my diff"
+hits the day the diff is empty, and the alternative reading would clean the whole app.
+An empty `excludeFiles` excludes nothing, which is just the unscoped run.
+
 ### Safety
 
 - **Nothing is written unless you ask** — with one caveat on `al_project_cleanup`.
@@ -224,9 +229,11 @@ forward slashes (or a `**/`-style glob). Both are normalised for you.
 - `al_project_cleanup` defaults to `dryRun: true`, but **a dry run is not read-only**.
   Workspace mode only writes to disk, so the tool snapshots every `.al` file first,
   lets the engine write, diffs, and then restores the originals from the snapshot
-  (in a `finally`, so a mid-run failure still rolls back). Consequences worth knowing:
-  files that *would* change get their mtime bumped, and the rollback is only as good
-  as the process staying alive. Run it on a clean git working tree.
+  (in a `finally`, so a mid-run failure still rolls back). The snapshot holds raw
+  bytes, so a file that is not valid UTF-8 is restored exactly rather than re-encoded.
+  Consequences worth knowing: files that *would* change get their mtime bumped, and
+  the rollback is only as good as the process staying alive. Run it on a clean git
+  working tree.
 - Run project-wide changes on a clean git working tree so they are easy to review
   or revert.
 
