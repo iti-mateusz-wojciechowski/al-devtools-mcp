@@ -1,5 +1,8 @@
 // End-to-end smoke test: drives the MCP server over stdio like a real client.
-// Read-only -- every call is preview/dryRun, nothing in the target repo is written.
+//
+// Every call is preview/dryRun, so the target repo is left as it was found. Note that
+// al_project_cleanup's dry run gets there by writing and then restoring from a
+// snapshot rather than by not writing -- point this at a clean working tree.
 
 import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -158,7 +161,7 @@ const header = (s) => console.log('\n' + '='.repeat(76) + `\n${s}\n` + '='.repea
   console.log(`(${Date.now() - t0}ms, isError=${r.isError})`);
   console.log(r.text.slice(0, 800));
 
-  header('7. al_project_cleanup (dry run -- writes nothing)');
+  header('7. al_project_cleanup (dry run -- writes, then restores the originals)');
   t0 = Date.now();
   r = await call('al_project_cleanup', { commands: ['sortProcedures'], projectPath: PROJECT, dryRun: true });
   console.log(`(${Date.now() - t0}ms, isError=${r.isError})`);
