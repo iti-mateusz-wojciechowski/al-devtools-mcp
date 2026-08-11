@@ -10,8 +10,8 @@
 // tool per command: tool schemas are paid for on every request, enum values are
 // not.
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, relative, basename, resolve } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, existsSync, realpathSync } from 'node:fs';
+import { join, relative, basename, resolve, isAbsolute } from 'node:path';
 import { findProjectPath } from './devtools.js';
 import { unifiedDiff, diffStats } from './diff.js';
 import { kindName } from './symbolKinds.js';
@@ -111,12 +111,22 @@ function describeCommands(map) {
   return Object.entries(map).map(([k, v]) => `- ${k}: ${v}`).join('\n');
 }
 
-function listAlFiles(dir, acc = []) {
+// Directories that cannot hold project source. Everything else is snapshotted,
+// including dot-directories: the snapshot is what a dry run is rolled back from, so
+// missing a file the engine writes would leave it modified. Deliberately errs towards
+// including too much rather than too little.
+const SNAPSHOT_SKIP_DIRS = new Set([
+  '.git', '.alpackages', '.alcache', '.snapshots', '.coverage', 'node_modules', 'bin', 'obj',
+]);
+
+function listAlFilesForSnapshot(dir, acc = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue; // .alpackages, .vscode, .git
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) listAlFiles(full, acc);
-    else if (entry.name.toLowerCase().endsWith('.al')) acc.push(full);
+    if (entry.isDirectory()) {
+      if (SNAPSHOT_SKIP_DIRS.has(entry.name.toLowerCase())) continue;
+      listAlFilesForSnapshot(join(dir, entry.name), acc);
+    } else if (entry.name.toLowerCase().endsWith('.al')) {
+      acc.push(join(dir, entry.name));
+    }
   }
   return acc;
 }
@@ -131,7 +141,18 @@ function listAlFiles(dir, acc = []) {
  * slashes, so normalise every path on the way in.
  */
 function nativePath(p) {
-  return p === undefined || p === null ? p : resolve(p);
+  if (p === undefined || p === null) return p;
+  const abs = resolve(p);
+  // 8.3 short components ("C:\Users\PIOTR~1.GWO\...") are a second way to spell a
+  // path the engine cannot match against its own file list: workspace commands come
+  // back with a bare "Object reference not set to an instance of an object.".
+  // realpathSync.native expands them to the long form. Only the existing prefix can
+  // be resolved, so fall back to the plain absolute path.
+  try {
+    return realpathSync.native(abs);
+  } catch {
+    return abs;
+  }
 }
 
 function resolveProject(filePath, explicit) {
@@ -236,72 +257,148 @@ export function buildTools(server) {
     {
       name: 'al_project_cleanup',
       description:
-        'Apply any al_cleanup or al_add_metadata commands across every .al file in a project. Use this rather ' +
-        'than looping a per-file tool when a fix applies to a whole app. Transforms in memory and reports ' +
-        'which files would change; writes nothing unless dryRun:false. Run it on a clean git working tree so ' +
-        'the change is easy to review or revert.',
+        'Apply any al_cleanup or al_add_metadata commands across a whole AL project in one pass. Use this ' +
+        'rather than looping a per-file tool when a fix applies to more than one file -- it hands the file walk ' +
+        'to the engine, which builds the semantic model once per command instead of once per file. Measured on ' +
+        'a 624-file app, a 9-command pass takes ~28s this way against ~100min looping per file.\n\n' +
+        'Pass includeFiles to scope the run (e.g. just the files in your diff); omit it for the whole project. ' +
+        'Reports which files changed, with per-file line counts.\n\n' +
+        'dryRun (the default) reports without leaving changes behind, but it is not a read-only operation: the ' +
+        'engine only writes to disk, so a dry run writes and then restores the original contents from an ' +
+        'in-memory snapshot. Run it on a clean git working tree. mtimes of files that would change are bumped.',
       inputSchema: {
         type: 'object',
         properties: {
           commands: {
             type: 'array',
             items: { type: 'string', enum: Object.keys(ALL_COMMANDS) },
-            description: 'Commands to apply in order to each file.',
+            description: 'Commands to apply, in order. Each runs once across the whole file set.',
           },
           projectPath: { type: 'string', description: 'AL project root containing app.json.' },
-          dryRun: { type: 'boolean', description: 'Report without writing. Default true.', default: true },
-          maxFiles: { type: 'number', description: 'Safety cap on files processed. Default 500.', default: 500 },
+          includeFiles: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Restrict the run to these .al files (absolute, or relative to projectPath). Omit to process ' +
+              'every .al file in the project. Use it to clean only the files you changed.',
+          },
+          excludeFiles: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Skip these .al files (absolute, or relative to projectPath).',
+          },
+          dryRun: { type: 'boolean', description: 'Report, then restore the original contents. Default true.', default: true },
         },
         required: ['commands', 'projectPath'],
       },
       handler: async (args) => {
-        const { commands, dryRun = true, maxFiles = 500 } = args;
+        const { commands, dryRun = true } = args;
         const projectPath = nativePath(args.projectPath);
         if (!Array.isArray(commands) || commands.length === 0) throw new Error('commands must be a non-empty array');
         for (const c of commands) if (!ALL_COMMANDS[c]) throw new Error(`Unknown command '${c}'`);
         if (!existsSync(join(projectPath, 'app.json'))) throw new Error(`No app.json in ${projectPath} -- not an AL project root.`);
 
-        const all = listAlFiles(projectPath);
-        const files = all.slice(0, maxFiles);
-        const truncated = all.length - files.length;
+        const asList = (list, label) => {
+          if (list === undefined || list === null) return undefined;
+          if (!Array.isArray(list)) throw new Error(`${label} must be an array of file paths`);
+          return list.length === 0 ? undefined : list;
+        };
 
-        const changed = [];
+        // The two lists are matched differently by the engine, and getting either wrong
+        // fails silently rather than erroring -- hence the normalisation here.
+        //
+        // includeFiles: absolute native paths, compared against the engine's own file
+        // list (this is what the VS Code extension sends for "uncommitted files").
+        const includeFiles = asList(args.includeFiles, 'includeFiles')?.map((f) => {
+          const abs = nativePath(isAbsolute(f) ? f : join(projectPath, f));
+          if (!existsSync(abs)) throw new Error(`includeFiles entry not found: ${f}`);
+          return abs;
+        });
+
+        // excludeFiles: project-relative, forward slashes. Absolute paths and
+        // backslash-separated paths are accepted and then quietly ignored, so anything
+        // that is not already a glob gets rewritten into the one form that works.
+        const excludeFiles = asList(args.excludeFiles, 'excludeFiles')?.map((f) => {
+          if (f.includes('*')) return f; // glob: the engine's own matcher handles it
+          const abs = nativePath(isAbsolute(f) ? f : join(projectPath, f));
+          if (!existsSync(abs)) throw new Error(`excludeFiles entry not found: ${f}`);
+          const rel = relative(projectPath, abs);
+          if (rel.startsWith('..')) throw new Error(`excludeFiles entry is outside the project: ${f}`);
+          return rel.split('\\').join('/');
+        });
+
+        // Workspace mode writes straight to disk and reports only a count, so the
+        // before/after contents needed for a diff -- and for undoing a dry run -- have
+        // to come from a snapshot taken here. 624 files of AL is ~1MB; cheap.
+        const snapshot = new Map();
+        for (const file of listAlFilesForSnapshot(projectPath)) {
+          try { snapshot.set(file, readFileSync(file, 'utf8')); } catch { /* unreadable: not ours to restore */ }
+        }
+
+        const restore = () => {
+          let count = 0;
+          for (const [file, original] of snapshot) {
+            try {
+              // Only rewrite what actually differs -- restoring every file would bump
+              // mtimes across the project and invalidate downstream review markers.
+              if (readFileSync(file, 'utf8') !== original) { writeFileSync(file, original, 'utf8'); count++; }
+            } catch { /* file vanished */ }
+          }
+          return count;
+        };
+
         const failed = [];
-        for (const file of files) {
-          let current;
-          try { current = readFileSync(file, 'utf8'); } catch (e) { failed.push({ file, error: e.message }); continue; }
-          const original = current;
+        let settled = false;
+        try {
           for (const command of commands) {
             try {
-              const res = await server.workspaceCommand({ command, source: current, projectPath, filePath: file });
-              if (res.source) current = res.source;
+              await server.workspaceCommand({
+                command, source: '', projectPath, filePath: undefined, includeFiles, excludeFiles,
+              });
             } catch (e) {
-              failed.push({ file, command, error: e.message });
+              failed.push({ command, error: e.message });
             }
           }
-          if (current !== original) {
-            const stats = diffStats(original, current);
-            if (!dryRun) writeFileSync(file, current, 'utf8');
-            changed.push({ file: relative(projectPath, file), ...stats });
+
+          const changed = [];
+          for (const [file, before] of snapshot) {
+            let after;
+            try { after = readFileSync(file, 'utf8'); } catch { continue; }
+            if (after !== before) changed.push({ file: relative(projectPath, file), ...diffStats(before, after) });
+          }
+          const created = listAlFilesForSnapshot(projectPath).filter((f) => !snapshot.has(f));
+
+          if (dryRun) restore();
+          settled = true;
+
+          const scope = includeFiles ? `${includeFiles.length} selected file(s)` : `${snapshot.size} file(s)`;
+          const lines = [
+            `${dryRun ? 'Dry run' : 'Applied'}: [${commands.join(', ')}] over ${scope} in ${basename(projectPath)}.`,
+            `${changed.length} file(s) ${dryRun ? 'would change' : 'changed'}.`,
+          ];
+          if (changed.length) {
+            lines.push('');
+            changed.sort((a, b) => a.file.localeCompare(b.file));
+            for (const c of changed) lines.push(`  ${c.file}  +${c.added}/-${c.removed}`);
+          }
+          if (created.length) {
+            lines.push('', `NOTE: ${created.length} new .al file(s) appeared and were left in place:`);
+            for (const f of created.slice(0, 20)) lines.push(`  ${relative(projectPath, f)}`);
+          }
+          if (failed.length) {
+            lines.push('', `${failed.length} command(s) failed:`);
+            for (const f of failed) lines.push(`  [${f.command}]: ${f.error}`);
+          }
+          if (dryRun && changed.length) lines.push('', 'Pass dryRun: false to write these changes.');
+          return { text: lines.join('\n') };
+        } finally {
+          // A throw after the engine has already written would otherwise leave a
+          // "dry" run's changes on disk.
+          if (dryRun && !settled) {
+            const n = restore();
+            if (n) server.log?.(`restored ${n} file(s) after a failed dry run`);
           }
         }
-
-        const lines = [
-          `${dryRun ? 'Dry run' : 'Applied'}: [${commands.join(', ')}] over ${files.length} file(s) in ${basename(projectPath)}.`,
-          `${changed.length} file(s) ${dryRun ? 'would change' : 'changed'}.`,
-        ];
-        if (truncated > 0) lines.push(`NOTE: ${truncated} additional file(s) skipped by maxFiles=${maxFiles}.`);
-        if (changed.length) {
-          lines.push('');
-          for (const c of changed) lines.push(`  ${c.file}  +${c.added}/-${c.removed}`);
-        }
-        if (failed.length) {
-          lines.push('', `${failed.length} failure(s):`);
-          for (const f of failed.slice(0, 20)) lines.push(`  ${relative(projectPath, f.file)}${f.command ? ` [${f.command}]` : ''}: ${f.error}`);
-          if (failed.length > 20) lines.push(`  ...and ${failed.length - 20} more`);
-        }
-        if (dryRun && changed.length) lines.push('', 'Pass dryRun: false to write these changes.');
-        return { text: lines.join('\n') };
       },
     },
 

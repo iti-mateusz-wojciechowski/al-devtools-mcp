@@ -12,6 +12,7 @@
     "check": "node scripts/check.js",
     "register": "node scripts/register.js",
     "smoke": "node test/smoke.js",
+    "test:project-cleanup": "node test/project-cleanup.js",
     "test:no-vscode": "node test/no-vscode.js"
   },
   "repository": {

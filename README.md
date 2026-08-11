@@ -168,7 +168,7 @@ portable VS Code install, a devcontainer, or a CI runner with no VS Code at all
 |---|---|
 | `al_cleanup` | 22 purely syntactic fixes to one file: `sortProcedures`, `sortTableFields`, `sortVariables`, `removeBeginEnd`, `fixKeywordsCase`, … |
 | `al_add_metadata` | 14 symbol-aware fixes to one file: `addDataClassification`, `addAppAreas`, `addAllObjectsPermissions`, `removeUnusedVariables`, `convertObjectIdsToNames`, `removeWith`, … |
-| `al_project_cleanup` | Apply commands across every `.al` file in a project. `dryRun: true` by default. |
+| `al_project_cleanup` | Apply commands across a whole project in one engine pass, or across `includeFiles` only. `dryRun: true` by default. |
 | `al_find_duplicates` | Structural duplicate-code detection across a project. |
 | `al_outline` | Compact structural outline of one file, instead of reading it. |
 
@@ -198,11 +198,35 @@ Use `al_outline` to *find* fields lacking captions, then write the text yourself
 `projectPath` is optional on the per-file tools — the nearest ancestor directory
 containing `app.json` is used.
 
+### Project-wide runs
+
+`al_project_cleanup` hands the file walk to the engine: one workspace command per
+requested command, whatever the file count. The engine builds its semantic model once
+per command instead of once per file, which is the whole ball game for the two
+expensive commands — `addParentheses` and `removeWith` cost a flat ~4–7s per *call*
+regardless of file size. Measured on a 624-file app with a 9-command pass:
+
+| | engine calls | wall clock |
+|---|---|---|
+| one call per file per command | 5,616 | ~100 min |
+| one call per command (current) | 9 | ~28–47 s |
+
+Pass `includeFiles` to scope a run to the files you actually changed — the equivalent
+of the extension's *Clean up code (uncommitted files)*. Note the two list parameters
+are matched differently by the engine, and a wrong format fails **silently**:
+`includeFiles` wants absolute paths, `excludeFiles` wants project-relative paths with
+forward slashes (or a `**/`-style glob). Both are normalised for you.
+
 ### Safety
 
-- **Nothing is written unless you ask.** `al_cleanup` and `al_add_metadata` default
-  to `write: false` and return a diff. `al_project_cleanup` defaults to
-  `dryRun: true`.
+- **Nothing is written unless you ask** — with one caveat on `al_project_cleanup`.
+  `al_cleanup` and `al_add_metadata` default to `write: false` and return a diff.
+- `al_project_cleanup` defaults to `dryRun: true`, but **a dry run is not read-only**.
+  Workspace mode only writes to disk, so the tool snapshots every `.al` file first,
+  lets the engine write, diffs, and then restores the originals from the snapshot
+  (in a `finally`, so a mid-run failure still rolls back). Consequences worth knowing:
+  files that *would* change get their mtime bumped, and the rollback is only as good
+  as the process staying alive. Run it on a clean git working tree.
 - Run project-wide changes on a clean git working tree so they are easy to review
   or revert.
 
