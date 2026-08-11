@@ -12,6 +12,8 @@
 //   - includeFiles/excludeFiles really scope the run -- the engine matches them in two
 //     different formats and ignores a wrong one silently, so a passing assertion is the
 //     only thing standing between us and a no-op
+//   - an empty includeFiles narrows to nothing rather than widening to everything
+//   - the restore puts original bytes back, not a re-encoding of them
 //   - bad input is rejected before anything is written
 
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -115,6 +117,22 @@ try {
   check('relative include changed F1', readFileSync(F1, 'utf8') !== M1);
   check('relative include left F2 alone', readFileSync(F2, 'utf8') === M2);
 
+  // An empty includeFiles is what a caller scoping to "the files in my diff" produces
+  // on the day the diff is empty. Treating it as "unscoped" would rewrite the whole
+  // project, so the no-op is asserted with dryRun off, where getting it wrong is
+  // unrecoverable.
+  header('an empty includeFiles selects nothing, not everything');
+  reset();
+  r = await tool.handler({ commands: CMDS, projectPath: root, dryRun: false, includeFiles: [] });
+  check('F1 untouched', readFileSync(F1, 'utf8') === M1);
+  check('F2 untouched', readFileSync(F2, 'utf8') === M2);
+  check('says nothing was selected', /Nothing to do: includeFiles was empty/.test(r.text), r.text);
+  // The asymmetry is the point: an empty exclusion list excludes nothing, which is
+  // already the unscoped run, so it must not short-circuit the way include does.
+  reset();
+  r = await tool.handler({ commands: CMDS, projectPath: root, dryRun: false, excludeFiles: [] });
+  check('an empty excludeFiles still runs', /^2 file\(s\) changed/m.test(r.text), r.text);
+
   // The engine wants project-relative forward slashes here and silently ignores an
   // absolute path, so this asserts the normalisation, not just the plumbing.
   header('excludeFiles skips a file, given an absolute path');
@@ -146,6 +164,53 @@ try {
     check(`${label} rejected`, threw);
   }
   check('nothing written while rejecting', readFileSync(F1, 'utf8') === M1 && readFileSync(F2, 'utf8') === M2);
+
+  // -------------------------------------------------------- encoding fidelity
+  //
+  // The restore path is the only thing standing between a dry run and a modified
+  // tree, so it has to put the original *bytes* back, not a re-encoding of them.
+  // A source saved in a legacy ANSI codepage decodes to U+FFFD replacements, and
+  // writing that back corrupts the file irreversibly -- while reporting success.
+  //
+  // Both probes are deliberately dirty AL, and the assertion that each is reported
+  // as would-change is load-bearing: it proves the engine really rewrote the file
+  // and the restore really ran, rather than the bytes surviving untouched.
+  header('a dry run restores non-UTF-8 and BOM files byte-for-byte');
+  const encRoot = join(scratch, 'encoding');
+  makeProject(encRoot, 0);
+  const dirty = (name) => `CODEUNIT 50000 "${name}"
+{
+    PROCEDURE A()
+    VAR
+        n: Integer;
+    BEGIN
+        IF n > 1 THEN
+        BEGIN
+            n := 1;
+        END;
+    END;
+}
+`;
+  // "Zazolc" with cp1250 diacritics -- valid Windows-1250, invalid UTF-8.
+  const ansiFile = join(encRoot, 'src', 'Ansi.Codeunit.al');
+  writeFileSync(ansiFile, Buffer.concat([
+    Buffer.from('// Za'), Buffer.from([0xbf, 0xf3, 0xb3, 0xe6]), Buffer.from('\n'),
+    Buffer.from(dirty('Ansi'), 'utf8'),
+  ]));
+  const bomFile = join(encRoot, 'src', 'Bom.Codeunit.al');
+  writeFileSync(bomFile, Buffer.concat([
+    Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(dirty('Bom').replace('50000', '50001'), 'utf8'),
+  ]));
+
+  const ansiBefore = readFileSync(ansiFile);
+  const bomBefore = readFileSync(bomFile);
+  r = await tool.handler({ commands: CMDS, projectPath: encRoot, dryRun: true });
+  check('the ANSI file was rewritten by the engine', r.text.includes('Ansi.Codeunit.al'), r.text);
+  check('the BOM file was rewritten by the engine', r.text.includes('Bom.Codeunit.al'), r.text);
+  check('ANSI file restored byte-for-byte', readFileSync(ansiFile).equals(ansiBefore),
+    `${ansiBefore.length} -> ${readFileSync(ansiFile).length} bytes`);
+  check('BOM file restored byte-for-byte', readFileSync(bomFile).equals(bomBefore),
+    `${bomBefore.length} -> ${readFileSync(bomFile).length} bytes`);
 
   // ---------------------------------------------------------------- scale
   header('scale: 400 dirty files, dry run restores every one');

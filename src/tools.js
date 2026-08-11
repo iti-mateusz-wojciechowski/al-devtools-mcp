@@ -280,7 +280,8 @@ export function buildTools(server) {
             items: { type: 'string' },
             description:
               'Restrict the run to these .al files (absolute, or relative to projectPath). Omit to process ' +
-              'every .al file in the project. Use it to clean only the files you changed.',
+              'every .al file in the project. Use it to clean only the files you changed. Passing an empty ' +
+              'array selects nothing and does nothing -- it is not the same as omitting it.',
           },
           excludeFiles: {
             type: 'array',
@@ -301,15 +302,24 @@ export function buildTools(server) {
         const asList = (list, label) => {
           if (list === undefined || list === null) return undefined;
           if (!Array.isArray(list)) throw new Error(`${label} must be an array of file paths`);
-          return list.length === 0 ? undefined : list;
+          return list;
         };
+
+        // An explicitly empty includeFiles means "these files, and there are none of
+        // them" -- the shape a caller lands on the day its diff comes back empty.
+        // Folding it into undefined would turn that into "the whole project", which is
+        // the one interpretation nobody asking for a scoped run could want.
+        const requested = asList(args.includeFiles, 'includeFiles');
+        if (requested && requested.length === 0) {
+          return { text: `Nothing to do: includeFiles was empty, so no files were selected in ${basename(projectPath)}.` };
+        }
 
         // The two lists are matched differently by the engine, and getting either wrong
         // fails silently rather than erroring -- hence the normalisation here.
         //
         // includeFiles: absolute native paths, compared against the engine's own file
         // list (this is what the VS Code extension sends for "uncommitted files").
-        const includeFiles = asList(args.includeFiles, 'includeFiles')?.map((f) => {
+        const includeFiles = requested?.map((f) => {
           const abs = nativePath(isAbsolute(f) ? f : join(projectPath, f));
           if (!existsSync(abs)) throw new Error(`includeFiles entry not found: ${f}`);
           return abs;
@@ -318,21 +328,29 @@ export function buildTools(server) {
         // excludeFiles: project-relative, forward slashes. Absolute paths and
         // backslash-separated paths are accepted and then quietly ignored, so anything
         // that is not already a glob gets rewritten into the one form that works.
-        const excludeFiles = asList(args.excludeFiles, 'excludeFiles')?.map((f) => {
+        // An empty list here is simply "exclude nothing" -- it widens nothing.
+        const excluded = asList(args.excludeFiles, 'excludeFiles');
+        const excludeFiles = excluded?.length ? excluded.map((f) => {
           if (f.includes('*')) return f; // glob: the engine's own matcher handles it
           const abs = nativePath(isAbsolute(f) ? f : join(projectPath, f));
           if (!existsSync(abs)) throw new Error(`excludeFiles entry not found: ${f}`);
           const rel = relative(projectPath, abs);
           if (rel.startsWith('..')) throw new Error(`excludeFiles entry is outside the project: ${f}`);
           return rel.split('\\').join('/');
-        });
+        }) : undefined;
 
         // Workspace mode writes straight to disk and reports only a count, so the
         // before/after contents needed for a diff -- and for undoing a dry run -- have
         // to come from a snapshot taken here. 624 files of AL is ~1MB; cheap.
+        //
+        // Kept as raw bytes rather than decoded text. AL sources are meant to be UTF-8,
+        // but a legacy file saved in an ANSI codepage decodes to U+FFFD replacement
+        // characters, and writing that string back does not restore the file -- it
+        // rewrites it, lossily, as the very operation promising to leave it alone.
+        // Bytes in, bytes out, and the comparison is exact for free.
         const snapshot = new Map();
         for (const file of listAlFilesForSnapshot(projectPath)) {
-          try { snapshot.set(file, readFileSync(file, 'utf8')); } catch { /* unreadable: not ours to restore */ }
+          try { snapshot.set(file, readFileSync(file)); } catch { /* unreadable: not ours to restore */ }
         }
 
         const restore = () => {
@@ -341,7 +359,7 @@ export function buildTools(server) {
             try {
               // Only rewrite what actually differs -- restoring every file would bump
               // mtimes across the project and invalidate downstream review markers.
-              if (readFileSync(file, 'utf8') !== original) { writeFileSync(file, original, 'utf8'); count++; }
+              if (!readFileSync(file).equals(original)) { writeFileSync(file, original); count++; }
             } catch { /* file vanished */ }
           }
           return count;
@@ -363,8 +381,14 @@ export function buildTools(server) {
           const changed = [];
           for (const [file, before] of snapshot) {
             let after;
-            try { after = readFileSync(file, 'utf8'); } catch { continue; }
-            if (after !== before) changed.push({ file: relative(projectPath, file), ...diffStats(before, after) });
+            try { after = readFileSync(file); } catch { continue; }
+            if (after.equals(before)) continue;
+            // Decoding is safe here: the line counts are for the report only, and the
+            // bytes the restore uses are untouched by it.
+            changed.push({
+              file: relative(projectPath, file),
+              ...diffStats(before.toString('utf8'), after.toString('utf8')),
+            });
           }
           const created = listAlFilesForSnapshot(projectPath).filter((f) => !snapshot.has(f));
 
