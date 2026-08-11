@@ -43,7 +43,13 @@ if (which.status !== 0) {
 }
 
 console.log('\nRegistering...');
-const run = spawnSync('claude', ['mcp', 'add', 'al-devtools', '--scope', scope, '--', 'node', entry], {
+// The entry path is quoted because `shell: true` hands the argv to cmd.exe or sh as
+// one string, without quoting anything for you. An unquoted path containing spaces
+// -- "OneDrive - Contoso Ltd", "Program Files", a user folder with a space -- then
+// arrives as several arguments, and registration succeeds while writing an args
+// array split at every space. That fails at connect time, far from the cause. The
+// "Equivalent command" printed above has always quoted it; this matches it.
+const run = spawnSync('claude', ['mcp', 'add', 'al-devtools', '--scope', scope, '--', 'node', `"${entry}"`], {
   stdio: 'inherit',
   shell: true,
 });
